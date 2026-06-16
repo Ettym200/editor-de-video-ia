@@ -7,7 +7,6 @@ from broll import fetch_broll
 
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/app/outputs")
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
-HYPERFRAMES_BIN = os.getenv("HYPERFRAMES_BIN", "hyperframes")
 
 
 def process_video(job_id: str, payload: dict, update_status):
@@ -17,38 +16,48 @@ def process_video(job_id: str, payload: dict, update_status):
     use_broll = payload["broll"]
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.mp4")
 
-    update_status(job_id, "processing", 15, "Transcrevendo áudio...")
-    transcript_path = os.path.join(OUTPUT_DIR, f"{job_id}_transcript.json")
-    transcribe(input_path, transcript_path, language)
-
-    update_status(job_id, "processing", 30, "Removendo silêncios e erros...")
+    update_status(job_id, "processing", 20, "Removendo silêncios...")
     cut_path = os.path.join(OUTPUT_DIR, f"{job_id}_cut.mp4")
     rough_cut(input_path, cut_path)
 
+    update_status(job_id, "processing", 40, "Transcrevendo áudio...")
+    transcript_path = os.path.join(OUTPUT_DIR, f"{job_id}_transcript.json")
+    transcribe(cut_path, transcript_path, language)
+
     broll_clips = []
     if use_broll:
-        update_status(job_id, "processing", 50, "Buscando clipes de b-roll...")
-        broll_clips = fetch_broll(language)
+        update_status(job_id, "processing", 50, "Buscando b-roll...")
+        with open(transcript_path) as f:
+            transcript_data = json.load(f)
+        cut_duration = get_video_duration(cut_path)
+        probe = subprocess.run([
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height", "-of", "csv=p=0", cut_path
+        ], capture_output=True, text=True)
+        try:
+            vid_w, vid_h = [int(x) for x in probe.stdout.strip().split(",")]
+        except Exception:
+            vid_w, vid_h = 1080, 1920
+        broll_clips = fetch_broll(language, transcript=transcript_data, video_duration=cut_duration,
+                                   video_width=vid_w, video_height=vid_h)
 
-    update_status(job_id, "processing", 65, "Gerando animações e motion graphics...")
-    duration = get_video_duration(cut_path)
-    composition_path = os.path.join(OUTPUT_DIR, f"{job_id}_comp.html")
-    animated_path = os.path.join(OUTPUT_DIR, f"{job_id}_animated.mp4")
-    generate_composition(cut_path, transcript_path, duration, style, broll_clips, composition_path, language)
-    render_composition(composition_path, animated_path)
+    update_status(job_id, "processing", 65, "Aplicando legendas e efeitos...")
+    with open(transcript_path) as f:
+        transcript = json.load(f)
 
-    update_status(job_id, "processing", 90, "Finalizando...")
-    merge_audio(cut_path, animated_path, output_path)
+    subtitle_path = os.path.join(OUTPUT_DIR, f"{job_id}.srt")
+    generate_srt(transcript, subtitle_path)
 
-    for path in [cut_path, animated_path, composition_path, transcript_path]:
+    update_status(job_id, "processing", 80, "Renderizando vídeo final...")
+    apply_effects(cut_path, subtitle_path, style, broll_clips, output_path)
+
+    for path in [cut_path, subtitle_path, transcript_path]:
         if os.path.exists(path):
             os.remove(path)
 
 
 def rough_cut(input_path: str, output_path: str):
-    """Remove silêncios usando silencedetect + concat demuxer."""
-
-    # 1. Detecta silêncios
+    """Remove silêncios e aplica punch-in zoom no início de cada corte."""
     result = subprocess.run([
         "ffmpeg", "-i", input_path,
         "-af", "silencedetect=noise=-35dB:d=0.5",
@@ -56,19 +65,14 @@ def rough_cut(input_path: str, output_path: str):
     ], capture_output=True, text=True)
 
     log = result.stderr
-
-    # 2. Extrai intervalos de silêncio
     silence_starts = [float(x) for x in re.findall(r"silence_start: (\S+)", log)]
     silence_ends = [float(x) for x in re.findall(r"silence_end: (\S+)", log)]
-
     duration = get_video_duration(input_path)
 
     if not silence_starts:
-        # Sem silêncios detectados — copia direto
         subprocess.run(["cp", input_path, output_path], check=True)
         return
 
-    # 3. Monta intervalos de fala (inverso dos silêncios)
     keep = []
     prev = 0.0
     for start, end in zip(silence_starts, silence_ends):
@@ -82,258 +86,250 @@ def rough_cut(input_path: str, output_path: str):
         subprocess.run(["cp", input_path, output_path], check=True)
         return
 
-    # 4. Monta filtergraph select
-    expr_parts = [f"between(t,{s:.3f},{e:.3f})" for s, e in keep]
-    expr = "+".join(expr_parts)
+    # Extrai cada segmento com punch-in zoom nos primeiros 0.3s
+    tmp_dir = output_path + "_segments"
+    os.makedirs(tmp_dir, exist_ok=True)
+    segment_files = []
+    concat_list = os.path.join(tmp_dir, "list.txt")
+
+    ZOOM_DUR = 0.3   # duração do zoom em segundos
+    ZOOM_MAX = 1.06  # zoom máximo (6%)
+
+    for i, (start, end) in enumerate(keep):
+        seg_path = os.path.join(tmp_dir, f"seg_{i:04d}.mp4")
+        seg_dur = end - start
+
+        # Zoom in nos primeiros ZOOM_DUR segundos, depois volta a 1.0
+        # Usa scale+crop que é muito mais rápido que zoompan
+        zoom_filter = (
+            f"scale=iw*{ZOOM_MAX}:ih*{ZOOM_MAX},"
+            f"crop=iw/{ZOOM_MAX}:ih/{ZOOM_MAX}:"
+            f"x='(iw-ow)/2*(1-min(t/{ZOOM_DUR},1))':"
+            f"y='(ih-oh)/2*(1-min(t/{ZOOM_DUR},1))'"
+            if seg_dur > ZOOM_DUR else "null"
+        )
+
+        r = subprocess.run([
+            "ffmpeg",
+            "-ss", str(start), "-t", str(seg_dur),
+            "-i", input_path,
+            "-vf", zoom_filter,
+            "-c:v", "libx264", "-preset", "fast",
+            "-c:a", "aac",
+            seg_path, "-y"
+        ], capture_output=True, text=True)
+
+        if r.returncode == 0:
+            segment_files.append(seg_path)
+        else:
+            # fallback sem zoom
+            subprocess.run([
+                "ffmpeg",
+                "-ss", str(start), "-t", str(seg_dur),
+                "-i", input_path,
+                "-c:v", "libx264", "-preset", "fast", "-c:a", "aac",
+                seg_path, "-y"
+            ], capture_output=True)
+            if os.path.exists(seg_path):
+                segment_files.append(seg_path)
+
+    if not segment_files:
+        subprocess.run(["cp", input_path, output_path], check=True)
+        import shutil; shutil.rmtree(tmp_dir, ignore_errors=True)
+        return
+
+    # Concatena todos os segmentos
+    with open(concat_list, "w") as f:
+        for seg in segment_files:
+            f.write(f"file '{seg}'\n")
 
     result = subprocess.run([
-        "ffmpeg", "-i", input_path,
-        "-filter_complex",
-        f"[0:v]select='{expr}',setpts=N/FRAME_RATE/TB[v];"
-        f"[0:a]aselect='{expr}',asetpts=N/SR/TB[a]",
-        "-map", "[v]", "-map", "[a]",
-        "-c:v", "libx264", "-c:a", "aac",
+        "ffmpeg", "-f", "concat", "-safe", "0",
+        "-i", concat_list,
+        "-c:v", "libx264", "-preset", "fast", "-c:a", "aac",
         output_path, "-y"
     ], capture_output=True, text=True)
 
+    import shutil
+    shutil.rmtree(tmp_dir, ignore_errors=True)
+
     if result.returncode != 0:
-        print(f"rough_cut erro: {result.stderr[-500:]}")
+        print(f"rough_cut concat erro: {result.stderr[-300:]}")
         subprocess.run(["cp", input_path, output_path], check=True)
 
 
 def transcribe(input_path: str, transcript_path: str, language: str):
-    """Usa HyperFrames para transcrever o vídeo."""
-    result = subprocess.run([
-        HYPERFRAMES_BIN, "transcribe", input_path,
-        "--language", language, "--json",
-    ], capture_output=True, text=True)
+    """Usa ffmpeg para extrair áudio e whisper para transcrever."""
+    try:
+        import whisper
+        audio_path = transcript_path.replace(".json", ".wav")
+        subprocess.run([
+            "ffmpeg", "-i", input_path, "-ar", "16000", "-ac", "1",
+            audio_path, "-y"
+        ], capture_output=True, check=True)
 
-    default = os.path.join(os.path.dirname(input_path), "transcript.json")
-    if os.path.exists(default):
-        os.rename(default, transcript_path)
-    elif result.stdout.strip():
+        model = whisper.load_model("small")
+        result = model.transcribe(audio_path, language=language if language != "auto" else None, word_timestamps=True)
+
+        words = []
+        for seg in result.get("segments", []):
+            for w in seg.get("words", []):
+                words.append({"word": w["word"], "start": w["start"], "end": w["end"]})
+
         with open(transcript_path, "w") as f:
-            f.write(result.stdout)
-    else:
+            json.dump({"words": words, "text": result.get("text", "")}, f)
+
+        if os.path.exists(audio_path):
+            os.remove(audio_path)
+    except Exception as e:
+        print(f"transcribe erro (usando fallback vazio): {e}")
         with open(transcript_path, "w") as f:
             json.dump({"words": [], "text": ""}, f)
 
 
-def generate_composition(video_path, transcript_path, duration, style, broll_clips, composition_path, language):
-    """Claude gera HTML de composição para HyperFrames."""
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-
-    with open(transcript_path) as f:
-        transcript = json.load(f)
-
+def generate_srt(transcript: dict, srt_path: str):
+    """Gera arquivo .srt a partir do transcript."""
     words = transcript.get("words", [])
-    text = transcript.get("text", "")[:500]
+    if not words:
+        open(srt_path, "w").close()
+        return
 
-    style_guide = {
-        "modern": "Clean white text, smooth fade transitions, blue accents",
-        "cinematic": "Golden text, dramatic scale animations, dark overlays",
-        "minimal": "Minimal white text, subtle animations",
-        "energetic": "Bold colorful text, fast zoom animations",
-    }.get(style, "modern clean style")
+    # Agrupa palavras em legendas de ~5 palavras ou 3 segundos
+    segments = []
+    chunk = []
+    chunk_start = None
 
-    broll_info = f"B-roll clips available: {broll_clips}" if broll_clips else ""
+    for w in words:
+        if chunk_start is None:
+            chunk_start = w["start"]
+        chunk.append(w["word"])
+        duration = w["end"] - chunk_start
+        if len(chunk) >= 5 or duration >= 3.0:
+            segments.append((chunk_start, w["end"], " ".join(chunk).strip()))
+            chunk = []
+            chunk_start = None
 
-    response = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=8192,
-        messages=[{"role": "user", "content": f"""Generate a HyperFrames HTML composition for video editing.
+    if chunk and chunk_start is not None:
+        segments.append((chunk_start, words[-1]["end"], " ".join(chunk).strip()))
 
-VIDEO: duration={duration:.1f}s, language={language}
-STYLE: {style_guide}
-TRANSCRIPT: {text}
-WORD TIMESTAMPS (first 15): {json.dumps(words[:15])}
-{broll_info}
+    def fmt(t):
+        h = int(t // 3600)
+        m = int((t % 3600) // 60)
+        s = int(t % 60)
+        ms = int((t % 1) * 1000)
+        return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
-Generate complete HTML using the HyperFrames blank template:
-- viewport 1920x1080
-- GSAP from CDN for animations
-- Main video: id="a-roll" src="__VIDEO_SRC__" data-duration="{duration:.1f}" data-track-index="0"
-- Audio: id="a-roll-audio" src="__VIDEO_SRC__" data-track-index="2"
-- Add subtitle overlays synced to speech using data-start/data-duration attributes
-- Add zoom-in effects on key moments with GSAP
-- Add lower-third text for important phrases
-- Use data-composition-id="main" on root div
-
-Return ONLY the complete HTML, no explanation."""}]
-    )
-
-    html = response.content[0].text.strip()
-    if html.startswith("```"):
-        html = "\n".join(html.split("\n")[1:-1])
-    # Usa file:// para o Chrome headless conseguir acessar o arquivo local
-    html = html.replace("__VIDEO_SRC__", f"file://{video_path}").replace("__VIDEO_DURATION__", str(duration))
-    html = html.replace(f'src="{video_path}"', f'src="file://{video_path}"')
-    html = html.replace(f"src='{video_path}'", f"src='file://{video_path}'")
-
-    with open(composition_path, "w", encoding="utf-8") as f:
-        f.write(html)
+    with open(srt_path, "w", encoding="utf-8") as f:
+        for i, (start, end, text) in enumerate(segments, 1):
+            f.write(f"{i}\n{fmt(start)} --> {fmt(end)}\n{text}\n\n")
 
 
-def render_composition(composition_path: str, output_path: str):
-    """Renderiza HTML com HyperFrames servindo vídeo via HTTP local."""
-    import shutil
-    import threading
-    import http.server
-    import socketserver
+def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: list, output_path: str):
+    """Aplica color grade, zoom, fade, legendas e b-roll via FFmpeg."""
 
-    comp_dir = composition_path.replace(".html", "_dir")
-    os.makedirs(comp_dir, exist_ok=True)
-
-    port = 18765
-
-    class RangeHTTPRequestHandler(http.server.SimpleHTTPRequestHandler):
-        """HTTP handler com suporte a Range requests (necessário para vídeo no Chrome)."""
-
-        def do_GET(self):
-            path = self.translate_path(self.path)
-            if not os.path.isfile(path):
-                self.send_error(404)
-                return
-
-            file_size = os.path.getsize(path)
-            range_header = self.headers.get("Range")
-
-            if range_header:
-                # Parse "bytes=start-end"
-                try:
-                    byte_range = range_header.replace("bytes=", "")
-                    start_str, end_str = byte_range.split("-")
-                    start = int(start_str) if start_str else 0
-                    end = int(end_str) if end_str else file_size - 1
-                    end = min(end, file_size - 1)
-                    length = end - start + 1
-
-                    self.send_response(206)
-                    self.send_header("Content-Type", self.guess_type(path))
-                    self.send_header("Content-Range", f"bytes {start}-{end}/{file_size}")
-                    self.send_header("Content-Length", str(length))
-                    self.send_header("Accept-Ranges", "bytes")
-                    self.end_headers()
-
-                    with open(path, "rb") as f:
-                        f.seek(start)
-                        remaining = length
-                        while remaining > 0:
-                            chunk = f.read(min(65536, remaining))
-                            if not chunk:
-                                break
-                            self.wfile.write(chunk)
-                            remaining -= len(chunk)
-                except Exception:
-                    self.send_error(416)
-            else:
-                self.send_response(200)
-                self.send_header("Content-Type", self.guess_type(path))
-                self.send_header("Content-Length", str(file_size))
-                self.send_header("Accept-Ranges", "bytes")
-                self.end_headers()
-                with open(path, "rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        self.wfile.write(chunk)
-
-        def log_message(self, format, *args):
-            pass  # silencia logs do servidor HTTP
-
-    class ThreadedHTTPServer(socketserver.ThreadingMixIn, http.server.HTTPServer):
-        daemon_threads = True
-
-    os.chdir("/app")
-    httpd = ThreadedHTTPServer(("0.0.0.0", port), RangeHTTPRequestHandler)
-
-    t = threading.Thread(target=httpd.serve_forever, daemon=True)
-    t.start()
-
-    # Atualiza o HTML para usar http://localhost
-    with open(composition_path, "r", encoding="utf-8") as f:
-        html = f.read()
-
-    html = html.replace("file:///app/", f"http://localhost:{port}/")
-    html = html.replace("/app/outputs/", f"http://localhost:{port}/outputs/")
-    html = html.replace("/app/uploads/", f"http://localhost:{port}/uploads/")
-
-    index_path = os.path.join(comp_dir, "index.html")
-    with open(index_path, "w", encoding="utf-8") as f:
-        f.write(html)
-
-    result = subprocess.run([
-        HYPERFRAMES_BIN, "render", comp_dir,
-        "--output", output_path,
-        "--quality", "standard", "--fps", "30",
-        "--browser-arg", "--no-sandbox",
-    ], capture_output=True, text=True)
-
-    httpd.shutdown()
-    shutil.rmtree(comp_dir, ignore_errors=True)
-
-    if result.returncode != 0:
-        raise RuntimeError(f"HyperFrames render falhou: {result.stderr[-500:]}")
-
-
-def merge_audio(original: str, animated: str, output_path: str):
-    """Merge áudio do vídeo cortado com o vídeo animado."""
-    result = subprocess.run([
-        "ffmpeg", "-i", animated, "-i", original,
-        "-map", "0:v:0", "-map", "1:a:0",
-        "-c:v", "copy", "-c:a", "aac", "-shortest",
-        output_path, "-y"
-    ], capture_output=True, text=True)
-
-    if result.returncode != 0:
-        subprocess.run(["cp", animated, output_path], check=True)
-
-
-def add_animations(input_path: str, output_path: str, style: str, broll_clips: list):
-    """Aplica color grade por estilo e insere b-roll se disponível."""
+    duration = get_video_duration(input_path)
+    fade_dur = min(0.5, duration * 0.05)
 
     style_filters = {
-        "modern":     "eq=contrast=1.1:brightness=0.02:saturation=1.2",
-        "cinematic":  "eq=contrast=1.2:brightness=-0.05:saturation=0.85",
-        "minimal":    "eq=contrast=1.0:brightness=0.0:saturation=0.9",
-        "energetic":  "eq=contrast=1.3:brightness=0.05:saturation=1.4",
+        "modern":    "eq=contrast=1.1:brightness=0.02:saturation=1.2",
+        "cinematic": "eq=contrast=1.2:brightness=-0.05:saturation=0.85",
+        "minimal":   "eq=contrast=1.0:brightness=0.0:saturation=0.9",
+        "energetic": "eq=contrast=1.3:brightness=0.05:saturation=1.4",
     }
-    color_filter = style_filters.get(style, style_filters["modern"])
+    color = style_filters.get(style, style_filters["modern"])
+
+    # Fade in e fade out
+    fade = f"fade=t=in:st=0:d={fade_dur:.2f},fade=t=out:st={duration-fade_dur:.2f}:d={fade_dur:.2f}"
+
+    has_subs = os.path.exists(subtitle_path) and os.path.getsize(subtitle_path) > 0
+
+    sub_styles = {
+        "modern":    "FontName=Arial,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=10,MarginV=120",
+        "cinematic": "FontName=Georgia,FontSize=14,PrimaryColour=&H0000D7FF,OutlineColour=&H00000000,Outline=2,Bold=0,Alignment=10,MarginV=120",
+        "minimal":   "FontName=Helvetica,FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=1,Bold=0,Alignment=10,MarginV=120",
+        "energetic": "FontName=Impact,FontSize=16,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=3,Bold=1,Alignment=10,MarginV=120",
+    }
+    sub_style = sub_styles.get(style, sub_styles["modern"])
 
     if broll_clips:
-        duration = get_video_duration(input_path)
-        mid = duration / 2
-        broll = broll_clips[0]
-        broll_dur = min(5.0, get_video_duration(broll))
+        clip_dur = 4.0
+
+        # Detecta dimensões do vídeo principal
+        probe = subprocess.run([
+            "ffprobe", "-v", "error", "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "csv=p=0", input_path
+        ], capture_output=True, text=True)
+        try:
+            w, h = [int(x) for x in probe.stdout.strip().split(",")]
+        except Exception:
+            w, h = 1080, 1920
+
+        inputs_list = ["-i", input_path]
+        filter_parts = [f"[0:v]{color}[base]"]
+
+        prev = "[base]"
+        for i, (broll_path, timestamp) in enumerate(broll_clips):
+            inputs_list += ["-i", broll_path]
+            idx = i + 1
+            broll_actual_dur = min(clip_dur, get_video_duration(broll_path))
+            st = timestamp
+
+            # Escala e corta o b-roll para preencher exatamente as dimensões do vídeo principal
+            filter_parts.append(
+                f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                f"crop={w}:{h},setsar=1[b{idx}]"
+            )
+            out_label = f"[v{idx}]"
+            filter_parts.append(
+                f"{prev}[b{idx}]overlay=0:0:enable='between(t,{st:.2f},{st+broll_actual_dur:.2f})'{out_label}"
+            )
+            prev = out_label
+
+        if has_subs:
+            filter_parts.append(f"{prev}subtitles='{subtitle_path}':force_style='{sub_style}'[out]")
+            out_map = "[out]"
+        else:
+            out_map = prev
+
+        filter_complex = ";".join(filter_parts)
+        maps = ["-map", out_map, "-map", "0:a"]
 
         result = subprocess.run([
-            "ffmpeg",
-            "-i", input_path,
-            "-i", broll,
-            "-filter_complex",
-            f"[0:v]{color_filter}[main];"
-            f"[1:v]scale=1920:1080:force_original_aspect_ratio=decrease,"
-            f"pad=1920:1080:(ow-iw)/2:(oh-ih)/2[broll];"
-            f"[main][broll]overlay=enable='between(t,{mid},{mid+broll_dur})'[v]",
-            "-map", "[v]", "-map", "0:a",
-            "-c:v", "libx264", "-c:a", "aac",
+            "ffmpeg", *inputs_list,
+            "-filter_complex", filter_complex,
+            *maps,
+            "-c:v", "libx264", "-preset", "fast", "-c:a", "aac",
             output_path, "-y"
         ], capture_output=True, text=True)
 
         if result.returncode == 0:
             return
+        print(f"apply_effects broll erro: {result.stderr[-500:]}")
 
     # Sem b-roll
+    filters = [color, fade]
+    if has_subs:
+        filters.append(f"subtitles='{subtitle_path}':force_style='{sub_style}'")
+    vf = ",".join(filters)
+
     result = subprocess.run([
         "ffmpeg", "-i", input_path,
-        "-vf", color_filter,
-        "-c:a", "copy",
+        "-vf", vf,
+        "-c:v", "libx264", "-preset", "fast", "-c:a", "aac",
         output_path, "-y"
     ], capture_output=True, text=True)
 
     if result.returncode != 0:
-        subprocess.run(["cp", input_path, output_path], check=True)
+        print(f"apply_effects erro (zoom): {result.stderr[-300:]}")
+        # fallback sem zoom (mais rápido)
+        vf_simple = color
+        if has_subs:
+            vf_simple += f",subtitles='{subtitle_path}':force_style='{sub_style}'"
+        subprocess.run([
+            "ffmpeg", "-i", input_path, "-vf", vf_simple,
+            "-c:v", "libx264", "-c:a", "aac", output_path, "-y"
+        ], capture_output=True)
 
 
 def get_video_duration(video_path: str) -> float:

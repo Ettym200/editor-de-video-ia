@@ -22,7 +22,12 @@ def update_status(job_id: str, status: str, progress: int, message: str = ""):
 def run():
     print("Worker iniciado, aguardando jobs...")
     while True:
-        job_data = r.brpop("video_jobs", timeout=5)
+        try:
+            job_data = r.brpop("video_jobs", timeout=5)
+        except Exception as e:
+            print(f"Redis timeout/erro, reconectando: {e}")
+            time.sleep(2)
+            continue
         if not job_data:
             continue
 

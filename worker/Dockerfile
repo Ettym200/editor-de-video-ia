@@ -55,7 +55,10 @@ RUN echo '#!/bin/sh' > /usr/local/bin/hyperframes \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir setuptools wheel
+RUN pip install --no-cache-dir torch --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir openai-whisper --no-build-isolation
+RUN pip install --no-cache-dir redis anthropic python-dotenv httpx requests
 
 COPY . .
 
