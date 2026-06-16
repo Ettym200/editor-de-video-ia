@@ -1,0 +1,28 @@
+import json
+import os
+import redis
+from dotenv import load_dotenv
+
+load_dotenv()
+
+REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
+r = redis.from_url(REDIS_URL)
+
+
+def enqueue_job(job_id: str, input_path: str, language: str, style: str, broll: bool):
+    payload = {
+        "job_id": job_id,
+        "input_path": input_path,
+        "language": language,
+        "style": style,
+        "broll": broll,
+    }
+    r.set(f"job:{job_id}:status", json.dumps({"status": "queued", "progress": 0}))
+    r.lpush("video_jobs", json.dumps(payload))
+
+
+def get_job_status(job_id: str):
+    data = r.get(f"job:{job_id}:status")
+    if not data:
+        return None
+    return json.loads(data)
