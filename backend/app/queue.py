@@ -9,13 +9,16 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379")
 r = redis.from_url(REDIS_URL)
 
 
-def enqueue_job(job_id: str, input_path: str, language: str, style: str, broll: bool):
+def enqueue_job(job_id: str, input_path: str, language: str, style: str, broll: bool,
+                user_prompt: str = "", clarification_answers: dict = {}):
     payload = {
         "job_id": job_id,
         "input_path": input_path,
         "language": language,
         "style": style,
         "broll": broll,
+        "user_prompt": user_prompt,
+        "clarification_answers": clarification_answers,
     }
     r.set(f"job:{job_id}:status", json.dumps({"status": "queued", "progress": 0}))
     r.lpush("video_jobs", json.dumps(payload))

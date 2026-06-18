@@ -1,17 +1,75 @@
 import uuid
 import os
+import json
 import aiofiles
+import anthropic
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 from app.queue import enqueue_job
 
 router = APIRouter()
 
 UPLOAD_DIR = os.getenv("UPLOAD_DIR", "/app/uploads")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/app/outputs")
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+class AnalyzePromptRequest(BaseModel):
+    prompt: str
+
+
+class AnalyzePromptResponse(BaseModel):
+    needs_clarification: bool
+    questions: list[str]
+    summary: str
+
+
+@router.post("/analyze-prompt", response_model=AnalyzePromptResponse)
+async def analyze_prompt(body: AnalyzePromptRequest):
+    """Analisa o prompt do cliente e retorna perguntas de clarificação se necessário."""
+    if not body.prompt.strip():
+        return AnalyzePromptResponse(needs_clarification=False, questions=[], summary="")
+
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    response = client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=600,
+        messages=[{"role": "user", "content": f"""You are analyzing a video editing instruction from a client.
+
+Client instruction: "{body.prompt}"
+
+Determine if this instruction contains ambiguous requests that need clarification before processing.
+Ambiguous examples: "remove errors", "identify problems", "cut bad parts", "improve quality", "fix mistakes"
+Clear examples: "search for Rio de Janeiro images", "add Copa do Mundo b-roll", "use yellow subtitles"
+
+Return a JSON object:
+{{
+  "needs_clarification": true/false,
+  "questions": ["question 1 in Portuguese", "question 2 in Portuguese"],
+  "summary": "brief summary in Portuguese of what will be done with this prompt"
+}}
+
+If needs_clarification is true, write 1-3 specific questions in Portuguese to understand exactly what the client wants.
+If false, questions should be empty array.
+Return only the JSON object."""}]
+    )
+
+    try:
+        text = response.content[0].text.strip()
+        if text.startswith("```"):
+            text = "\n".join(text.split("\n")[1:-1])
+        data = json.loads(text)
+        return AnalyzePromptResponse(
+            needs_clarification=data.get("needs_clarification", False),
+            questions=data.get("questions", []),
+            summary=data.get("summary", ""),
+        )
+    except Exception:
+        return AnalyzePromptResponse(needs_clarification=False, questions=[], summary="")
 
 
 @router.post("/upload")
@@ -20,6 +78,8 @@ async def upload_video(
     language: str = Form("pt"),
     style: str = Form("modern"),
     broll: bool = Form(True),
+    user_prompt: str = Form(""),
+    clarification_answers: str = Form("{}"),
 ):
     if not file.filename.endswith((".mp4", ".mov", ".avi", ".mkv")):
         raise HTTPException(400, "Formato de vídeo não suportado")
@@ -31,7 +91,12 @@ async def upload_video(
         content = await file.read()
         await f.write(content)
 
-    enqueue_job(job_id, input_path, language, style, broll)
+    try:
+        answers = json.loads(clarification_answers)
+    except Exception:
+        answers = {}
+
+    enqueue_job(job_id, input_path, language, style, broll, user_prompt, answers)
 
     return {"job_id": job_id, "status": "queued"}
 

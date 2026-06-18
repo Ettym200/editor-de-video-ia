@@ -28,7 +28,7 @@ const STEPS = [
   { label: "Renderizando", icon: "🎞️" },
 ];
 
-type Status = "idle" | "uploading" | "processing" | "completed" | "error";
+type Status = "idle" | "clarifying" | "uploading" | "processing" | "completed" | "error";
 
 interface JobStatus {
   status: string;
@@ -36,16 +36,26 @@ interface JobStatus {
   message: string;
 }
 
+interface ClarificationData {
+  needs_clarification: boolean;
+  questions: string[];
+  summary: string;
+}
+
 export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [language, setLanguage] = useState("pt");
   const [style, setStyle] = useState("modern");
   const [broll, setBroll] = useState(true);
+  const [userPrompt, setUserPrompt] = useState("");
   const [status, setStatus] = useState<Status>("idle");
   const [jobId, setJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<JobStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const [clarification, setClarification] = useState<ClarificationData | null>(null);
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [analyzing, setAnalyzing] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -60,7 +70,40 @@ export default function Home() {
     if (f) handleFile(f);
   }, []);
 
-  const handleUpload = async () => {
+  const handleSubmit = async () => {
+    if (!file) return;
+
+    // Se tem prompt, analisa antes de enviar
+    if (userPrompt.trim()) {
+      setAnalyzing(true);
+      try {
+        const res = await fetch(`${API_URL}/videos/analyze-prompt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ prompt: userPrompt }),
+        });
+        const data: ClarificationData = await res.json();
+        setAnalyzing(false);
+
+        if (data.needs_clarification && data.questions.length > 0) {
+          setClarification(data);
+          setAnswers(Object.fromEntries(data.questions.map(q => [q, ""])));
+          setStatus("clarifying");
+          return;
+        }
+      } catch {
+        setAnalyzing(false);
+      }
+    }
+
+    await doUpload({});
+  };
+
+  const handleClarificationSubmit = async () => {
+    await doUpload(answers);
+  };
+
+  const doUpload = async (clarificationAnswers: Record<string, string>) => {
     if (!file) return;
     setStatus("uploading");
     setError(null);
@@ -70,6 +113,8 @@ export default function Home() {
     form.append("language", language);
     form.append("style", style);
     form.append("broll", String(broll));
+    form.append("user_prompt", userPrompt);
+    form.append("clarification_answers", JSON.stringify(clarificationAnswers));
 
     try {
       const res = await fetch(`${API_URL}/videos/upload`, { method: "POST", body: form });
@@ -108,13 +153,12 @@ export default function Home() {
     setJobId(null);
     setJobStatus(null);
     setError(null);
+    setClarification(null);
+    setAnswers({});
+    setUserPrompt("");
     if (pollRef.current) clearInterval(pollRef.current);
     if (fileRef.current) fileRef.current.value = "";
   };
-
-  const activeStep = STEPS.findIndex((s) =>
-    jobStatus?.message?.toLowerCase().includes(s.label.toLowerCase().split(" ")[0])
-  );
 
   return (
     <main className="min-h-screen bg-[#0a0a0f] text-white flex flex-col">
@@ -144,7 +188,7 @@ export default function Home() {
             </p>
           </div>
 
-          {/* Form */}
+          {/* Form principal */}
           {status === "idle" && (
             <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-6 space-y-5">
 
@@ -202,10 +246,23 @@ export default function Home() {
               {/* Style preview */}
               {(() => {
                 const s = STYLES.find(s => s.value === style);
-                return s ? (
-                  <p className="text-xs text-white/30 text-center">{s.icon} {s.desc}</p>
-                ) : null;
+                return s ? <p className="text-xs text-white/30 text-center">{s.icon} {s.desc}</p> : null;
               })()}
+
+              {/* Prompt field */}
+              <div className="space-y-1.5">
+                <label className="text-xs text-white/40 font-medium uppercase tracking-wider">
+                  Instruções para a IA <span className="normal-case text-white/20">(opcional)</span>
+                </label>
+                <textarea
+                  value={userPrompt}
+                  onChange={(e) => setUserPrompt(e.target.value)}
+                  placeholder="Ex: busque imagens do Rio de Janeiro, o vídeo fala sobre a Copa, procure pessoas comemorando, retire partes onde eu gaguejei..."
+                  rows={3}
+                  className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-violet-500 transition-colors resize-none"
+                />
+                <p className="text-xs text-white/20">A IA vai analisar suas instruções e pode fazer perguntas antes de processar</p>
+              </div>
 
               {/* B-roll toggle */}
               <div
@@ -220,22 +277,69 @@ export default function Home() {
                     <p className="text-xs text-white/30">Insere clipes e imagens relacionados ao conteúdo</p>
                   </div>
                 </div>
-                <div className={`w-10 h-5.5 rounded-full transition-colors relative flex-shrink-0
-                  ${broll ? "bg-violet-600" : "bg-white/10"}`}
-                  style={{ width: 40, height: 22 }}>
-                  <div className={`absolute top-0.5 w-4.5 h-4.5 bg-white rounded-full shadow transition-transform
-                    ${broll ? "translate-x-5" : "translate-x-0.5"}`}
-                    style={{ width: 18, height: 18, top: 2, left: broll ? 20 : 2, position: "absolute", transition: "left 0.2s" }} />
+                <div style={{ width: 40, height: 22, borderRadius: 11, backgroundColor: broll ? "#7c3aed" : "rgba(255,255,255,0.1)", position: "relative", flexShrink: 0, transition: "background-color 0.2s" }}>
+                  <div style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: "white", position: "absolute", top: 2, left: broll ? 20 : 2, transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)" }} />
                 </div>
               </div>
 
               {/* Submit */}
-              <button onClick={handleUpload} disabled={!file}
+              <button onClick={handleSubmit} disabled={!file || analyzing}
                 className="w-full bg-violet-600 hover:bg-violet-500 disabled:bg-white/5 disabled:text-white/20 disabled:cursor-not-allowed
                   text-white font-semibold py-3.5 rounded-xl transition-all duration-200 text-sm
-                  shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30">
-                {file ? "✨ Editar vídeo com IA" : "Selecione um vídeo para começar"}
+                  shadow-lg shadow-violet-600/20 hover:shadow-violet-500/30 flex items-center justify-center gap-2">
+                {analyzing ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Analisando instruções...
+                  </>
+                ) : file ? "✨ Editar vídeo com IA" : "Selecione um vídeo para começar"}
               </button>
+            </div>
+          )}
+
+          {/* Modal de clarificação */}
+          {status === "clarifying" && clarification && (
+            <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-6 space-y-6">
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="text-2xl">🤔</span>
+                  <h2 className="text-lg font-bold">Preciso de mais detalhes</h2>
+                </div>
+                <p className="text-white/40 text-sm">
+                  Suas instruções contêm pedidos que precisam de clarificação para processar corretamente.
+                </p>
+                {clarification.summary && (
+                  <div className="bg-violet-500/10 border border-violet-500/20 rounded-lg px-4 py-3 text-sm text-violet-300">
+                    {clarification.summary}
+                  </div>
+                )}
+              </div>
+
+              <div className="space-y-4">
+                {clarification.questions.map((question, i) => (
+                  <div key={i} className="space-y-2">
+                    <label className="text-sm text-white/80 font-medium">{question}</label>
+                    <textarea
+                      value={answers[question] || ""}
+                      onChange={(e) => setAnswers(prev => ({ ...prev, [question]: e.target.value }))}
+                      placeholder="Sua resposta..."
+                      rows={2}
+                      className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-2.5 text-sm text-white placeholder-white/20 focus:outline-none focus:border-violet-500 transition-colors resize-none"
+                    />
+                  </div>
+                ))}
+              </div>
+
+              <div className="flex gap-3">
+                <button onClick={() => setStatus("idle")}
+                  className="flex-1 bg-white/5 hover:bg-white/10 text-white/60 font-medium py-3 rounded-xl transition-colors text-sm">
+                  Voltar
+                </button>
+                <button onClick={handleClarificationSubmit}
+                  className="flex-2 flex-grow bg-violet-600 hover:bg-violet-500 text-white font-semibold py-3 rounded-xl transition-colors text-sm shadow-lg shadow-violet-600/20">
+                  ✨ Processar vídeo
+                </button>
+              </div>
             </div>
           )}
 
@@ -256,7 +360,6 @@ export default function Home() {
                 <p className="text-white/30 text-xs">Isso pode levar alguns minutos dependendo do tamanho do vídeo</p>
               </div>
 
-              {/* Progress bar */}
               <div className="space-y-2">
                 <div className="flex justify-between text-xs text-white/30">
                   <span>Progresso</span>
@@ -268,7 +371,6 @@ export default function Home() {
                 </div>
               </div>
 
-              {/* Steps */}
               <div className="grid grid-cols-5 gap-2">
                 {STEPS.map((step, i) => {
                   const progress = jobStatus?.progress || 0;
@@ -276,8 +378,7 @@ export default function Home() {
                   const done = progress >= stepProgress;
                   const current = progress >= stepProgress - 20 && progress < stepProgress;
                   return (
-                    <div key={i} className={`text-center space-y-1.5 transition-all
-                      ${done ? "opacity-100" : current ? "opacity-80" : "opacity-25"}`}>
+                    <div key={i} className={`text-center space-y-1.5 transition-all ${done ? "opacity-100" : current ? "opacity-80" : "opacity-25"}`}>
                       <div className={`text-xl transition-transform ${current ? "animate-bounce" : ""}`}>
                         {done ? "✅" : step.icon}
                       </div>
@@ -302,8 +403,7 @@ export default function Home() {
                   className="flex items-center justify-center gap-2 w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-3.5 rounded-xl transition-colors shadow-lg shadow-green-600/20">
                   ⬇️ Baixar vídeo editado
                 </a>
-                <button onClick={reset}
-                  className="w-full text-white/30 hover:text-white/60 text-sm py-2 transition-colors">
+                <button onClick={reset} className="w-full text-white/30 hover:text-white/60 text-sm py-2 transition-colors">
                   Editar outro vídeo
                 </button>
               </div>
@@ -315,14 +415,12 @@ export default function Home() {
             <div className="bg-red-500/5 border border-red-500/20 rounded-2xl p-8 text-center space-y-4">
               <div className="text-4xl">⚠️</div>
               <p className="text-red-400 text-sm">{error || "Erro ao processar vídeo"}</p>
-              <button onClick={reset}
-                className="bg-white/5 hover:bg-white/10 text-white px-6 py-2.5 rounded-lg text-sm transition-colors">
+              <button onClick={reset} className="bg-white/5 hover:bg-white/10 text-white px-6 py-2.5 rounded-lg text-sm transition-colors">
                 Tentar novamente
               </button>
             </div>
           )}
 
-          {/* Footer */}
           <p className="text-center text-white/15 text-xs">
             Powered by Claude AI · Whisper · FFmpeg · Pexels
           </p>

@@ -32,13 +32,14 @@ Reply with only: anime OR realistic"""}]
     return "anime" if "anime" in result else "realistic"
 
 
-def extract_keywords_with_timestamps(transcript: dict, video_duration: float) -> list:
+def extract_keywords_with_timestamps(transcript: dict, video_duration: float, user_context: str = "") -> list:
     words = transcript.get("words", [])
     text = transcript.get("text", "")
     if not text.strip() or not words:
         return []
 
     max_clips = max(3, int(video_duration / (CLIP_DUR + MIN_GAP)))
+    context_block = f"\nClient instructions (prioritize these for b-roll selection):\n{user_context}\n" if user_context else ""
 
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     response = client.messages.create(
@@ -46,7 +47,7 @@ def extract_keywords_with_timestamps(transcript: dict, video_duration: float) ->
         max_tokens=600,
         messages=[{"role": "user", "content": f"""Analyze this transcript and find up to {max_clips} moments spread throughout the ENTIRE video for b-roll footage.
 Space them across the full duration — don't cluster at the start.
-
+{context_block}
 Transcript: {text[:1500]}
 All word timestamps: {json.dumps(words)}
 Video duration: {video_duration:.1f}s
@@ -59,6 +60,7 @@ Rules:
 - Cover FULL video from start to end
 - Match timestamp to when topic is spoken
 - Use English search terms
+- If client specified specific images/videos to search, prioritize those
 Return only the JSON array."""}]
     )
 
@@ -235,7 +237,8 @@ def image_to_video(image_path: str, output_path: str, width: int, height: int, d
 
 def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
                 transcript: dict = None, video_duration: float = 60.0,
-                video_width: int = 1080, video_height: int = 1920) -> list:
+                video_width: int = 1080, video_height: int = 1920,
+                user_context: str = "") -> list:
     if not transcript:
         return []
 
@@ -243,7 +246,7 @@ def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
     category = detect_category(text)
     print(f"Categoria detectada: {category}")
 
-    keywords_with_ts = extract_keywords_with_timestamps(transcript, video_duration)
+    keywords_with_ts = extract_keywords_with_timestamps(transcript, video_duration, user_context)
     if not keywords_with_ts:
         return []
 

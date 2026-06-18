@@ -14,7 +14,18 @@ def process_video(job_id: str, payload: dict, update_status):
     language = payload["language"]
     style = payload["style"]
     use_broll = payload["broll"]
+    user_prompt = payload.get("user_prompt", "")
+    clarification_answers = payload.get("clarification_answers", {})
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.mp4")
+
+    # Monta contexto completo combinando prompt e respostas de clarificação
+    full_context = ""
+    if user_prompt:
+        full_context += f"Instruções do cliente: {user_prompt}\n"
+    if clarification_answers:
+        full_context += "Respostas de clarificação:\n"
+        for q, a in clarification_answers.items():
+            full_context += f"- {q}: {a}\n"
 
     update_status(job_id, "processing", 20, "Removendo silêncios...")
     cut_path = os.path.join(OUTPUT_DIR, f"{job_id}_cut.mp4")
@@ -39,7 +50,7 @@ def process_video(job_id: str, payload: dict, update_status):
         except Exception:
             vid_w, vid_h = 1080, 1920
         broll_clips = fetch_broll(language, transcript=transcript_data, video_duration=cut_duration,
-                                   video_width=vid_w, video_height=vid_h)
+                                   video_width=vid_w, video_height=vid_h, user_context=full_context)
 
     update_status(job_id, "processing", 65, "Aplicando legendas e efeitos...")
     with open(transcript_path) as f:
