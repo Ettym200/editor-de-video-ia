@@ -10,6 +10,9 @@ services:
       - INTERNAL_API_URL=http://api:8000
     depends_on:
       - api
+    networks:
+      - default
+      - easypanel
 
   api:
     build: ./backend
@@ -37,3 +40,8 @@ services:
 volumes:
   uploads:
   outputs:
+
+networks:
+  default:
+  easypanel:
+    external: true
