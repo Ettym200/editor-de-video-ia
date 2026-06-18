@@ -4,9 +4,9 @@ services:
   frontend:
     build: ./frontend
     ports:
-      - "3000:3000"
+      - "3001:3000"
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
     depends_on:
       - api
 
@@ -32,8 +32,6 @@ services:
 
   redis:
     image: redis:7-alpine
-    ports:
-      - "6379:6379"
 
 volumes:
   uploads:
