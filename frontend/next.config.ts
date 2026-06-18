@@ -2,6 +2,9 @@ import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  experimental: {
+    middlewareClientMaxBodySize: 500 * 1024 * 1024,
+  },
   async rewrites() {
     return [
       {
