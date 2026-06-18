@@ -255,10 +255,10 @@ def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: 
     has_subs = os.path.exists(subtitle_path) and os.path.getsize(subtitle_path) > 0
 
     sub_styles = {
-        "modern":    "FontName=Arial,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=10,MarginV=120",
-        "cinematic": "FontName=Georgia,FontSize=14,PrimaryColour=&H0000D7FF,OutlineColour=&H00000000,Outline=2,Bold=0,Alignment=10,MarginV=120",
-        "minimal":   "FontName=Helvetica,FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=1,Bold=0,Alignment=10,MarginV=120",
-        "energetic": "FontName=Impact,FontSize=16,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=3,Bold=1,Alignment=10,MarginV=120",
+        "modern":    "FontName=Arial,FontSize=14,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=2,Bold=1,Alignment=2,MarginV=30",
+        "cinematic": "FontName=Georgia,FontSize=14,PrimaryColour=&H0000D7FF,OutlineColour=&H00000000,Outline=2,Bold=0,Alignment=2,MarginV=30",
+        "minimal":   "FontName=Helvetica,FontSize=12,PrimaryColour=&H00FFFFFF,OutlineColour=&H00000000,Outline=1,Bold=0,Alignment=2,MarginV=30",
+        "energetic": "FontName=Impact,FontSize=16,PrimaryColour=&H0000FFFF,OutlineColour=&H00000000,Outline=3,Bold=1,Alignment=2,MarginV=30",
     }
     sub_style = sub_styles.get(style, sub_styles["modern"])
 
