@@ -226,7 +226,7 @@ export default function Home() {
                   <div className="space-y-2">
                     <div className="text-3xl opacity-40">📁</div>
                     <p className="text-white/50 text-sm">Arraste seu vídeo aqui ou <span className="text-violet-400">clique para selecionar</span></p>
-                    <p className="text-white/20 text-xs">MP4, MOV, AVI, MKV</p>
+                    <p className="text-white/20 text-xs">MP4, MOV, AVI, MKV · Máximo 450 MB</p>
                   </div>
                 )}
               </div>
