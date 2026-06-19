@@ -26,6 +26,7 @@ class AnalyzePromptResponse(BaseModel):
     needs_clarification: bool
     questions: list[str]
     summary: str
+    needs_position_picker: bool = False
 
 
 @router.post("/analyze-prompt", response_model=AnalyzePromptResponse)
@@ -46,15 +47,20 @@ Determine if this instruction contains ambiguous requests that need clarificatio
 Ambiguous examples: "remove errors", "identify problems", "cut bad parts", "improve quality", "fix mistakes"
 Clear examples: "search for Rio de Janeiro images", "add Copa do Mundo b-roll", "use yellow subtitles"
 
+Also detect if the instruction mentions a specific POSITION or LOCATION for b-roll images/videos
+(e.g., "canto superior direito", "top-right corner", "no centro", "no lado esquerdo", "corner", "side", etc.)
+
 Return a JSON object:
 {{
   "needs_clarification": true/false,
   "questions": ["question 1 in Portuguese", "question 2 in Portuguese"],
-  "summary": "brief summary in Portuguese of what will be done with this prompt"
+  "summary": "brief summary in Portuguese of what will be done with this prompt",
+  "needs_position_picker": true/false
 }}
 
 If needs_clarification is true, write 1-3 specific questions in Portuguese to understand exactly what the client wants.
 If false, questions should be empty array.
+Set needs_position_picker to true if a specific visual position/location for b-roll is mentioned.
 Return only the JSON object."""}]
     )
 
@@ -67,6 +73,7 @@ Return only the JSON object."""}]
             needs_clarification=data.get("needs_clarification", False),
             questions=data.get("questions", []),
             summary=data.get("summary", ""),
+            needs_position_picker=data.get("needs_position_picker", False),
         )
     except Exception:
         return AnalyzePromptResponse(needs_clarification=False, questions=[], summary="")
@@ -80,6 +87,7 @@ async def upload_video(
     broll: bool = Form(True),
     user_prompt: str = Form(""),
     clarification_answers: str = Form("{}"),
+    broll_position: str = Form("fullscreen"),
 ):
     if not file.filename.endswith((".mp4", ".mov", ".avi", ".mkv")):
         raise HTTPException(400, "Formato de vídeo não suportado")
@@ -96,7 +104,7 @@ async def upload_video(
     except Exception:
         answers = {}
 
-    enqueue_job(job_id, input_path, language, style, broll, user_prompt, answers)
+    enqueue_job(job_id, input_path, language, style, broll, user_prompt, answers, broll_position)
 
     return {"job_id": job_id, "status": "queued"}
 

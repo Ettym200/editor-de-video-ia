@@ -28,7 +28,7 @@ const STEPS = [
   { label: "Renderizando", icon: "🎞️" },
 ];
 
-type Status = "idle" | "clarifying" | "uploading" | "processing" | "completed" | "error";
+type Status = "idle" | "clarifying" | "position_picking" | "uploading" | "processing" | "completed" | "error";
 
 interface JobCost {
   input_tokens: number;
@@ -47,6 +47,7 @@ interface ClarificationData {
   needs_clarification: boolean;
   questions: string[];
   summary: string;
+  needs_position_picker: boolean;
 }
 
 export default function Home() {
@@ -63,6 +64,7 @@ export default function Home() {
   const [clarification, setClarification] = useState<ClarificationData | null>(null);
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [analyzing, setAnalyzing] = useState(false);
+  const [brollPosition, setBrollPosition] = useState("fullscreen");
   const fileRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -98,6 +100,11 @@ export default function Home() {
           setStatus("clarifying");
           return;
         }
+        if (data.needs_position_picker) {
+          setClarification(data);
+          setStatus("position_picking");
+          return;
+        }
       } catch {
         setAnalyzing(false);
       }
@@ -107,10 +114,19 @@ export default function Home() {
   };
 
   const handleClarificationSubmit = async () => {
+    if (clarification?.needs_position_picker) {
+      setStatus("position_picking");
+      return;
+    }
     await doUpload(answers);
   };
 
-  const doUpload = async (clarificationAnswers: Record<string, string>) => {
+  const handlePositionSelected = async (position: string) => {
+    setBrollPosition(position);
+    await doUpload(answers, position);
+  };
+
+  const doUpload = async (clarificationAnswers: Record<string, string>, position: string = brollPosition) => {
     if (!file) return;
     setStatus("uploading");
     setError(null);
@@ -122,6 +138,7 @@ export default function Home() {
     form.append("broll", String(broll));
     form.append("user_prompt", userPrompt);
     form.append("clarification_answers", JSON.stringify(clarificationAnswers));
+    form.append("broll_position", position);
 
     try {
       const res = await fetch(`${API_URL}/videos/upload`, { method: "POST", body: form });
@@ -163,6 +180,7 @@ export default function Home() {
     setClarification(null);
     setAnswers({});
     setUserPrompt("");
+    setBrollPosition("fullscreen");
     if (pollRef.current) clearInterval(pollRef.current);
     if (fileRef.current) fileRef.current.value = "";
   };
@@ -347,6 +365,45 @@ export default function Home() {
                   ✨ Processar vídeo
                 </button>
               </div>
+            </div>
+          )}
+
+          {/* Position Picker */}
+          {status === "position_picking" && (
+            <div className="bg-white/[0.03] border border-white/8 rounded-2xl p-6 space-y-5">
+              <div className="text-center space-y-1">
+                <p className="text-white font-semibold">Onde colocar o b-roll?</p>
+                <p className="text-white/40 text-xs">Clique na área do vídeo onde quer posicionar</p>
+              </div>
+
+              <div className="relative w-full rounded-xl overflow-hidden border border-white/10 bg-white/5" style={{aspectRatio: "16/9"}}>
+                <div className="absolute inset-0 grid grid-cols-3 grid-rows-3 gap-1 p-2">
+                  {[
+                    { pos: "top-left",     label: "↖", row: 1, col: 1 },
+                    { pos: "top-right",    label: "↗", row: 1, col: 3 },
+                    { pos: "center",       label: "⊙", row: 2, col: 2 },
+                    { pos: "bottom-left",  label: "↙", row: 3, col: 1 },
+                    { pos: "bottom-right", label: "↘", row: 3, col: 3 },
+                  ].map(({ pos, label, row, col }) => (
+                    <div key={pos} style={{ gridRow: row, gridColumn: col }}>
+                      <button
+                        onClick={() => handlePositionSelected(pos)}
+                        className="w-full h-full flex flex-col items-center justify-center gap-1 rounded-lg bg-white/5 hover:bg-violet-500/30 border border-white/10 hover:border-violet-500 transition-all text-white/50 hover:text-white group"
+                      >
+                        <span className="text-xl">{label}</span>
+                        <span className="text-[9px] opacity-0 group-hover:opacity-100 transition-opacity capitalize leading-tight text-center">{pos.replace("-", " ")}</span>
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <button
+                onClick={() => handlePositionSelected("fullscreen")}
+                className="w-full bg-white/5 hover:bg-white/10 text-white/50 hover:text-white font-medium py-2.5 rounded-xl transition-colors text-sm border border-white/8"
+              >
+                Tela inteira (padrão)
+              </button>
             </div>
           )}
 

@@ -16,6 +16,7 @@ def process_video(job_id: str, payload: dict, update_status):
     use_broll = payload["broll"]
     user_prompt = payload.get("user_prompt", "")
     clarification_answers = payload.get("clarification_answers", {})
+    broll_position = payload.get("broll_position", "fullscreen")
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.mp4")
 
     # Monta contexto completo combinando prompt e respostas de clarificação
@@ -63,7 +64,7 @@ def process_video(job_id: str, payload: dict, update_status):
     generate_srt(transcript, subtitle_path)
 
     update_status(job_id, "processing", 80, "Renderizando vídeo final...")
-    apply_effects(cut_path, subtitle_path, style, broll_clips, output_path)
+    apply_effects(cut_path, subtitle_path, style, broll_clips, output_path, broll_position)
 
     for path in [cut_path, subtitle_path, transcript_path]:
         if os.path.exists(path):
@@ -246,7 +247,7 @@ def generate_srt(transcript: dict, srt_path: str):
             f.write(f"{i}\n{fmt(start)} --> {fmt(end)}\n{text}\n\n")
 
 
-def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: list, output_path: str):
+def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: list, output_path: str, broll_position: str = "fullscreen"):
     """Aplica color grade, zoom, fade, legendas e b-roll via FFmpeg."""
 
     duration = get_video_duration(input_path)
@@ -297,15 +298,32 @@ def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: 
             broll_actual_dur = min(clip_dur, get_video_duration(broll_path))
             st = timestamp
 
-            # Escala e corta o b-roll para preencher exatamente as dimensões do vídeo principal
-            filter_parts.append(
-                f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
-                f"crop={w}:{h},setsar=1[b{idx}]"
-            )
             out_label = f"[v{idx}]"
-            filter_parts.append(
-                f"{prev}[b{idx}]overlay=0:0:enable='between(t,{st:.2f},{st+broll_actual_dur:.2f})'{out_label}"
-            )
+            if broll_position == "fullscreen":
+                filter_parts.append(
+                    f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
+                    f"crop={w}:{h},setsar=1[b{idx}]"
+                )
+                filter_parts.append(
+                    f"{prev}[b{idx}]overlay=0:0:enable='between(t,{st:.2f},{st+broll_actual_dur:.2f})'{out_label}"
+                )
+            else:
+                broll_w = int(w * 0.30)
+                margin = 20
+                pos_map = {
+                    "top-left":     f"{margin}:{margin}",
+                    "top-right":    f"W-w-{margin}:{margin}",
+                    "center":       f"(W-w)/2:(H-h)/2",
+                    "bottom-left":  f"{margin}:H-h-{margin}",
+                    "bottom-right": f"W-w-{margin}:H-h-{margin}",
+                }
+                xy = pos_map.get(broll_position, f"{margin}:{margin}")
+                filter_parts.append(
+                    f"[{idx}:v]scale={broll_w}:-1,setsar=1[b{idx}]"
+                )
+                filter_parts.append(
+                    f"{prev}[b{idx}]overlay={xy}:enable='between(t,{st:.2f},{st+broll_actual_dur:.2f})'{out_label}"
+                )
             prev = out_label
 
         if has_subs:
