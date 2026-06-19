@@ -10,6 +10,34 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY")
 PIXABAY_API_KEY = os.getenv("PIXABAY_API_KEY", "")
 OUTPUT_DIR = os.getenv("OUTPUT_DIR", "/app/outputs")
 
+FLAG_ISO_CODES = {
+    "afghanistan": "af", "albania": "al", "algeria": "dz", "angola": "ao",
+    "argentina": "ar", "australia": "au", "austria": "at", "azerbaijan": "az",
+    "bahrain": "bh", "bangladesh": "bd", "belgium": "be", "bolivia": "bo",
+    "bosnia": "ba", "brazil": "br", "brasil": "br", "cameroon": "cm",
+    "canada": "ca", "chile": "cl", "china": "cn", "colombia": "co",
+    "costa rica": "cr", "croatia": "hr", "cuba": "cu", "czech republic": "cz",
+    "czechia": "cz", "denmark": "dk", "ecuador": "ec", "egypt": "eg",
+    "england": "gb-eng", "ethiopia": "et", "france": "fr", "germany": "de",
+    "ghana": "gh", "greece": "gr", "honduras": "hn", "hungary": "hu",
+    "india": "in", "indonesia": "id", "iran": "ir", "iraq": "iq",
+    "ireland": "ie", "israel": "il", "italy": "it", "ivory coast": "ci",
+    "japan": "jp", "jordan": "jo", "kenya": "ke", "korea": "kr",
+    "kuwait": "kw", "malaysia": "my", "mali": "ml", "mexico": "mx",
+    "morocco": "ma", "netherlands": "nl", "new zealand": "nz",
+    "nigeria": "ng", "norway": "no", "oman": "om", "pakistan": "pk",
+    "panama": "pa", "paraguay": "py", "peru": "pe", "philippines": "ph",
+    "poland": "pl", "portugal": "pt", "qatar": "qa", "romania": "ro",
+    "russia": "ru", "saudi arabia": "sa", "scotland": "gb-sct",
+    "senegal": "sn", "serbia": "rs", "slovakia": "sk", "slovenia": "si",
+    "south africa": "za", "south korea": "kr", "spain": "es",
+    "sweden": "se", "switzerland": "ch", "syria": "sy", "thailand": "th",
+    "tunisia": "tn", "turkey": "tr", "ukraine": "ua", "united arab emirates": "ae",
+    "uae": "ae", "united kingdom": "gb", "uk": "gb", "united states": "us",
+    "usa": "us", "uruguay": "uy", "venezuela": "ve", "vietnam": "vn",
+    "wales": "gb-wls",
+}
+
 CLIP_DUR = 4.0
 MIN_GAP = 6.0
 
@@ -122,10 +150,32 @@ def fetch_pexels_video(query: str) -> str | None:
         return None
 
 
+def fetch_flag_image(query: str) -> str | None:
+    """Busca imagem de bandeira via flagcdn.com usando nome do país."""
+    q = query.lower().replace("flag", "").replace("bandeira", "").replace("national", "").strip()
+    iso_code = FLAG_ISO_CODES.get(q)
+    if not iso_code:
+        for name, code in FLAG_ISO_CODES.items():
+            if name in q or q in name:
+                iso_code = code
+                break
+    if not iso_code:
+        return None
+    url = f"https://flagcdn.com/w1280/{iso_code}.png"
+    try:
+        r = requests.head(url, timeout=5)
+        if r.status_code == 200:
+            return url
+    except Exception:
+        pass
+    return None
+
+
 def fetch_pixabay_image(query: str) -> str | None:
     """Busca foto no Pixabay (fallback gratuito)."""
-    # Pixabay tem API gratuita com chave pública de demonstração
-    api_key = PIXABAY_API_KEY or "47799478-a1b2c3d4e5f6a7b8c9d0e1f2a"  # chave demo
+    api_key = PIXABAY_API_KEY
+    if not api_key:
+        return None
     try:
         r = requests.get(
             "https://pixabay.com/api/",
@@ -291,6 +341,20 @@ def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
                     clips.append((clip_path, timestamp))
                     used_timestamps.append(timestamp)
                     print(f"B-roll anime '{query}' em t={timestamp:.1f}s")
+                    continue
+
+            # Detecta consultas de bandeira e usa flagcdn.com
+            is_flag_query = "flag" in query.lower() or "bandeira" in query.lower()
+            if is_flag_query:
+                flag_url = fetch_flag_image(query)
+                if flag_url:
+                    img_path = clip_path + ".img"
+                    download_file(flag_url, img_path)
+                    image_to_video(img_path, clip_path, video_width, video_height)
+                    os.remove(img_path)
+                    clips.append((clip_path, timestamp))
+                    used_timestamps.append(timestamp)
+                    print(f"B-roll bandeira '{query}' em t={timestamp:.1f}s")
                     continue
 
             # Realista: tenta vídeo Pexels primeiro

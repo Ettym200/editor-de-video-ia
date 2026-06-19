@@ -299,13 +299,14 @@ def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: 
             st = timestamp
 
             out_label = f"[v{idx}]"
+            enable = f"enable=between(t\\,{st:.2f}\\,{st+broll_actual_dur:.2f})"
             if broll_position == "fullscreen":
                 filter_parts.append(
                     f"[{idx}:v]scale={w}:{h}:force_original_aspect_ratio=increase,"
-                    f"crop={w}:{h},setsar=1[b{idx}]"
+                    f"crop={w}:{h},format=yuv420p,setsar=1[b{idx}]"
                 )
                 filter_parts.append(
-                    f"{prev}[b{idx}]overlay=0:0:enable='between(t,{st:.2f},{st+broll_actual_dur:.2f})'{out_label}"
+                    f"{prev}[b{idx}]overlay=0:0:{enable}{out_label}"
                 )
             else:
                 broll_w = int(w * 0.30)
@@ -319,10 +320,10 @@ def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: 
                 }
                 xy = pos_map.get(broll_position, f"{margin}:{margin}")
                 filter_parts.append(
-                    f"[{idx}:v]scale={broll_w}:-1,setsar=1[b{idx}]"
+                    f"[{idx}:v]scale={broll_w}:-2,format=yuv420p,setsar=1[b{idx}]"
                 )
                 filter_parts.append(
-                    f"{prev}[b{idx}]overlay={xy}:enable='between(t,{st:.2f},{st+broll_actual_dur:.2f})'{out_label}"
+                    f"{prev}[b{idx}]overlay={xy}:{enable}{out_label}"
                 )
             prev = out_label
 
@@ -333,7 +334,7 @@ def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: 
             out_map = prev
 
         filter_complex = ";".join(filter_parts)
-        maps = ["-map", out_map, "-map", "0:a"]
+        maps = ["-map", out_map, "-map", "0:a?"]
 
         result = subprocess.run([
             "ffmpeg", *inputs_list,
@@ -345,7 +346,7 @@ def apply_effects(input_path: str, subtitle_path: str, style: str, broll_clips: 
 
         if result.returncode == 0:
             return
-        print(f"apply_effects broll erro: {result.stderr[-500:]}")
+        print(f"apply_effects broll erro (rc={result.returncode}): {result.stderr[-3000:]}")
 
     # Sem b-roll
     filters = [color, fade]
