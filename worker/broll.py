@@ -14,7 +14,7 @@ CLIP_DUR = 4.0
 MIN_GAP = 6.0
 
 
-def detect_category(text: str) -> str:
+def detect_category(text: str) -> tuple:
     """Detecta categoria do conteúdo para escolher a fonte certa."""
     client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
     response = client.messages.create(
@@ -29,7 +29,8 @@ Text: {text[:300]}
 Reply with only: anime OR realistic"""}]
     )
     result = response.content[0].text.strip().lower()
-    return "anime" if "anime" in result else "realistic"
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
+    return ("anime" if "anime" in result else "realistic"), usage
 
 
 def extract_keywords_with_timestamps(transcript: dict, video_duration: float, user_context: str = "") -> list:
@@ -64,16 +65,17 @@ Rules:
 Return only the JSON array."""}]
     )
 
+    usage = {"input_tokens": response.usage.input_tokens, "output_tokens": response.usage.output_tokens}
     try:
         t = response.content[0].text.strip()
         if t.startswith("```"):
             t = "\n".join(t.split("\n")[1:-1])
         result = json.loads(t)
         print(f"B-roll keywords: {result}")
-        return result if isinstance(result, list) else []
+        return (result if isinstance(result, list) else []), usage
     except Exception as e:
         print(f"extract_keywords erro: {e}")
-        return []
+        return [], usage
 
 
 # ── Fontes de mídia ──────────────────────────────────────────────────────────
@@ -238,17 +240,21 @@ def image_to_video(image_path: str, output_path: str, width: int, height: int, d
 def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
                 transcript: dict = None, video_duration: float = 60.0,
                 video_width: int = 1080, video_height: int = 1920,
-                user_context: str = "") -> list:
+                user_context: str = "") -> tuple:
     if not transcript:
-        return []
+        return [], {"input_tokens": 0, "output_tokens": 0}
 
     text = transcript.get("text", "")
-    category = detect_category(text)
+    category, usage_cat = detect_category(text)
     print(f"Categoria detectada: {category}")
 
-    keywords_with_ts = extract_keywords_with_timestamps(transcript, video_duration, user_context)
+    keywords_with_ts, usage_kw = extract_keywords_with_timestamps(transcript, video_duration, user_context)
+    total_usage = {
+        "input_tokens": usage_cat["input_tokens"] + usage_kw["input_tokens"],
+        "output_tokens": usage_cat["output_tokens"] + usage_kw["output_tokens"],
+    }
     if not keywords_with_ts:
-        return []
+        return [], total_usage
 
     clips = []
     used_timestamps = []
@@ -316,4 +322,4 @@ def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
             continue
 
     clips.sort(key=lambda x: x[1])
-    return clips
+    return clips, total_usage

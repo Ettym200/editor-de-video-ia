@@ -35,6 +35,7 @@ def process_video(job_id: str, payload: dict, update_status):
     transcript_path = os.path.join(OUTPUT_DIR, f"{job_id}_transcript.json")
     transcribe(cut_path, transcript_path, language)
 
+    token_usage = {"input_tokens": 0, "output_tokens": 0}
     broll_clips = []
     if use_broll:
         update_status(job_id, "processing", 50, "Buscando b-roll...")
@@ -49,8 +50,10 @@ def process_video(job_id: str, payload: dict, update_status):
             vid_w, vid_h = [int(x) for x in probe.stdout.strip().split(",")]
         except Exception:
             vid_w, vid_h = 1080, 1920
-        broll_clips = fetch_broll(language, transcript=transcript_data, video_duration=cut_duration,
+        broll_clips, broll_usage = fetch_broll(language, transcript=transcript_data, video_duration=cut_duration,
                                    video_width=vid_w, video_height=vid_h, user_context=full_context)
+        token_usage["input_tokens"] += broll_usage["input_tokens"]
+        token_usage["output_tokens"] += broll_usage["output_tokens"]
 
     update_status(job_id, "processing", 65, "Aplicando legendas e efeitos...")
     with open(transcript_path) as f:
@@ -65,6 +68,14 @@ def process_video(job_id: str, payload: dict, update_status):
     for path in [cut_path, subtitle_path, transcript_path]:
         if os.path.exists(path):
             os.remove(path)
+
+    # Haiku 4.5 pricing: $0.80/MTok input, $4.00/MTok output
+    cost_usd = (token_usage["input_tokens"] * 0.80 / 1_000_000) + (token_usage["output_tokens"] * 4.00 / 1_000_000)
+    return {
+        "input_tokens": token_usage["input_tokens"],
+        "output_tokens": token_usage["output_tokens"],
+        "cost_usd": round(cost_usd, 6),
+    }
 
 
 def rough_cut(input_path: str, output_path: str):

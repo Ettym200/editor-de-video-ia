@@ -30,10 +30,17 @@ const STEPS = [
 
 type Status = "idle" | "clarifying" | "uploading" | "processing" | "completed" | "error";
 
+interface JobCost {
+  input_tokens: number;
+  output_tokens: number;
+  cost_usd: number;
+}
+
 interface JobStatus {
   status: string;
   progress: number;
   message: string;
+  cost?: JobCost;
 }
 
 interface ClarificationData {
@@ -398,6 +405,27 @@ export default function Home() {
                 <h2 className="text-xl font-bold text-white">Vídeo pronto!</h2>
                 <p className="text-white/40 text-sm">Seu vídeo foi editado com sucesso pela IA</p>
               </div>
+
+              {jobStatus?.cost && (
+                <div className="bg-white/[0.03] border border-white/8 rounded-xl p-4 text-left space-y-3">
+                  <p className="text-white/50 text-xs font-medium uppercase tracking-wider">Custo da edição</p>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="text-center">
+                      <p className="text-white/30 text-[10px] mb-1">Tokens entrada</p>
+                      <p className="text-white text-sm font-semibold">{jobStatus.cost.input_tokens.toLocaleString()}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-white/30 text-[10px] mb-1">Tokens saída</p>
+                      <p className="text-white text-sm font-semibold">{jobStatus.cost.output_tokens.toLocaleString()}</p>
+                    </div>
+                    <div className="text-center">
+                      <p className="text-white/30 text-[10px] mb-1">Custo estimado</p>
+                      <p className="text-green-400 text-sm font-bold">${jobStatus.cost.cost_usd.toFixed(4)}</p>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-3">
                 <a href={`${API_URL}/videos/${jobId}/download`} download
                   className="flex items-center justify-center gap-2 w-full bg-green-600 hover:bg-green-500 text-white font-semibold py-3.5 rounded-xl transition-colors shadow-lg shadow-green-600/20">

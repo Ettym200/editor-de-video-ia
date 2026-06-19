@@ -11,12 +11,11 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379")
 r = redis.from_url(REDIS_URL)
 
 
-def update_status(job_id: str, status: str, progress: int, message: str = ""):
-    r.set(f"job:{job_id}:status", json.dumps({
-        "status": status,
-        "progress": progress,
-        "message": message,
-    }))
+def update_status(job_id: str, status: str, progress: int, message: str = "", extra: dict = None):
+    data = {"status": status, "progress": progress, "message": message}
+    if extra:
+        data.update(extra)
+    r.set(f"job:{job_id}:status", json.dumps(data))
 
 
 def run():
@@ -37,8 +36,8 @@ def run():
         print(f"Processando job {job_id}")
         try:
             update_status(job_id, "processing", 10, "Iniciando processamento")
-            process_video(job_id, payload, update_status)
-            update_status(job_id, "completed", 100, "Vídeo pronto!")
+            cost = process_video(job_id, payload, update_status)
+            update_status(job_id, "completed", 100, "Vídeo pronto!", extra={"cost": cost})
             print(f"Job {job_id} concluído")
         except Exception as e:
             print(f"Erro no job {job_id}: {e}")
