@@ -10,7 +10,8 @@ r = redis.from_url(REDIS_URL)
 
 
 def enqueue_job(job_id: str, input_path: str, language: str, style: str, broll: bool,
-                user_prompt: str = "", clarification_answers: dict = {}, broll_position: str = "fullscreen"):
+                user_prompt: str = "", clarification_answers: dict = {}, broll_position: str = "fullscreen",
+                custom_image_paths: list = []):
     payload = {
         "job_id": job_id,
         "input_path": input_path,
@@ -20,6 +21,7 @@ def enqueue_job(job_id: str, input_path: str, language: str, style: str, broll: 
         "user_prompt": user_prompt,
         "clarification_answers": clarification_answers,
         "broll_position": broll_position,
+        "custom_image_paths": custom_image_paths,
     }
     r.set(f"job:{job_id}:status", json.dumps({"status": "queued", "progress": 0}))
     r.lpush("video_jobs", json.dumps(payload))

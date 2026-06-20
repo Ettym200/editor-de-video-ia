@@ -17,6 +17,7 @@ def process_video(job_id: str, payload: dict, update_status):
     user_prompt = payload.get("user_prompt", "")
     clarification_answers = payload.get("clarification_answers", {})
     broll_position = payload.get("broll_position", "fullscreen")
+    custom_image_paths = payload.get("custom_image_paths", [])
     output_path = os.path.join(OUTPUT_DIR, f"{job_id}_output.mp4")
 
     # Monta contexto completo combinando prompt e respostas de clarificação
@@ -52,7 +53,8 @@ def process_video(job_id: str, payload: dict, update_status):
         except Exception:
             vid_w, vid_h = 1080, 1920
         broll_clips, broll_usage = fetch_broll(language, transcript=transcript_data, video_duration=cut_duration,
-                                   video_width=vid_w, video_height=vid_h, user_context=full_context)
+                                   video_width=vid_w, video_height=vid_h, user_context=full_context,
+                                   custom_image_paths=custom_image_paths)
         token_usage["input_tokens"] += broll_usage["input_tokens"]
         token_usage["output_tokens"] += broll_usage["output_tokens"]
 

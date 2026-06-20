@@ -290,7 +290,7 @@ def image_to_video(image_path: str, output_path: str, width: int, height: int, d
 def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
                 transcript: dict = None, video_duration: float = 60.0,
                 video_width: int = 1080, video_height: int = 1920,
-                user_context: str = "") -> tuple:
+                user_context: str = "", custom_image_paths: list = []) -> tuple:
     if not transcript:
         return [], {"input_tokens": 0, "output_tokens": 0}
 
@@ -303,11 +303,32 @@ def fetch_broll(language: str = "pt", count: int = 3, transcript_text: str = "",
         "input_tokens": usage_cat["input_tokens"] + usage_kw["input_tokens"],
         "output_tokens": usage_cat["output_tokens"] + usage_kw["output_tokens"],
     }
-    if not keywords_with_ts:
-        return [], total_usage
 
     clips = []
     used_timestamps = []
+
+    # Processa imagens customizadas primeiro, distribuídas ao longo do vídeo
+    if custom_image_paths:
+        n = len(custom_image_paths)
+        interval = (video_duration - 10) / (n + 1)
+        for i, img_path in enumerate(custom_image_paths):
+            if not os.path.exists(img_path):
+                continue
+            ts = round(5.0 + interval * (i + 1), 1)
+            ts = max(1.0, min(ts, video_duration - CLIP_DUR - 1.0))
+            clip_id = f"custom_{i}"
+            clip_path = os.path.join(OUTPUT_DIR, f"broll_{clip_id}.mp4")
+            try:
+                image_to_video(img_path, clip_path, video_width, video_height)
+                clips.append((clip_path, ts))
+                used_timestamps.append(ts)
+                print(f"B-roll customizado '{os.path.basename(img_path)}' em t={ts:.1f}s")
+            except Exception as e:
+                print(f"fetch_broll custom image erro: {e}")
+
+    if not keywords_with_ts:
+        clips.sort(key=lambda x: x[1])
+        return clips, total_usage
 
     for item in keywords_with_ts:
         query = item.get("query", "")

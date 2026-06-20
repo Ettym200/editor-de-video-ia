@@ -6,6 +6,7 @@ import anthropic
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
+from typing import List, Optional
 from app.queue import enqueue_job
 
 router = APIRouter()
@@ -88,6 +89,7 @@ async def upload_video(
     user_prompt: str = Form(""),
     clarification_answers: str = Form("{}"),
     broll_position: str = Form("fullscreen"),
+    custom_images: Optional[List[UploadFile]] = File(None),
 ):
     if not file.filename.endswith((".mp4", ".mov", ".avi", ".mkv")):
         raise HTTPException(400, "Formato de vídeo não suportado")
@@ -99,12 +101,22 @@ async def upload_video(
         content = await file.read()
         await f.write(content)
 
+    custom_image_paths = []
+    if custom_images:
+        for i, img in enumerate(custom_images):
+            ext = os.path.splitext(img.filename or "img.jpg")[1] or ".jpg"
+            img_path = os.path.join(UPLOAD_DIR, f"{job_id}_custom_{i}{ext}")
+            async with aiofiles.open(img_path, "wb") as f:
+                content = await img.read()
+                await f.write(content)
+            custom_image_paths.append(img_path)
+
     try:
         answers = json.loads(clarification_answers)
     except Exception:
         answers = {}
 
-    enqueue_job(job_id, input_path, language, style, broll, user_prompt, answers, broll_position)
+    enqueue_job(job_id, input_path, language, style, broll, user_prompt, answers, broll_position, custom_image_paths)
 
     return {"job_id": job_id, "status": "queued"}
 

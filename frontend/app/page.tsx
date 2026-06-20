@@ -65,7 +65,9 @@ export default function Home() {
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [analyzing, setAnalyzing] = useState(false);
   const [brollPosition, setBrollPosition] = useState("fullscreen");
+  const [customImages, setCustomImages] = useState<File[]>([]);
   const fileRef = useRef<HTMLInputElement>(null);
+  const imageRef = useRef<HTMLInputElement>(null);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const handleFile = (f: File) => {
@@ -139,6 +141,7 @@ export default function Home() {
     form.append("user_prompt", userPrompt);
     form.append("clarification_answers", JSON.stringify(clarificationAnswers));
     form.append("broll_position", position);
+    customImages.forEach((img) => form.append("custom_images", img));
 
     try {
       const res = await fetch(`${API_URL}/videos/upload`, { method: "POST", body: form });
@@ -181,8 +184,10 @@ export default function Home() {
     setAnswers({});
     setUserPrompt("");
     setBrollPosition("fullscreen");
+    setCustomImages([]);
     if (pollRef.current) clearInterval(pollRef.current);
     if (fileRef.current) fileRef.current.value = "";
+    if (imageRef.current) imageRef.current.value = "";
   };
 
   return (
@@ -305,6 +310,51 @@ export default function Home() {
                 <div style={{ width: 40, height: 22, borderRadius: 11, backgroundColor: broll ? "#7c3aed" : "rgba(255,255,255,0.1)", position: "relative", flexShrink: 0, transition: "background-color 0.2s" }}>
                   <div style={{ width: 18, height: 18, borderRadius: 9, backgroundColor: "white", position: "absolute", top: 2, left: broll ? 20 : 2, transition: "left 0.2s", boxShadow: "0 1px 3px rgba(0,0,0,0.3)" }} />
                 </div>
+              </div>
+
+              {/* Custom images */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs text-white/40 font-medium uppercase tracking-wider">
+                    Imagens para o vídeo <span className="normal-case text-white/20">(opcional)</span>
+                  </label>
+                  {customImages.length > 0 && (
+                    <button onClick={() => imageRef.current?.click()}
+                      className="text-xs text-violet-400 hover:text-violet-300 transition-colors">
+                      + Adicionar mais
+                    </button>
+                  )}
+                </div>
+                <input ref={imageRef} type="file" accept="image/*" multiple className="hidden"
+                  onChange={(e) => {
+                    const files = Array.from(e.target.files || []);
+                    setCustomImages(prev => [...prev, ...files]);
+                    if (imageRef.current) imageRef.current.value = "";
+                  }} />
+                {customImages.length > 0 ? (
+                  <div className="flex flex-wrap gap-2 p-3 bg-white/[0.02] rounded-xl border border-white/8">
+                    {customImages.map((img, i) => (
+                      <div key={i} className="relative group flex-shrink-0">
+                        <img src={URL.createObjectURL(img)} alt={img.name}
+                          className="w-16 h-16 object-cover rounded-lg border border-white/10" />
+                        <button onClick={() => setCustomImages(prev => prev.filter((_, idx) => idx !== i))}
+                          className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-white text-[10px] flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity leading-none">
+                          ×
+                        </button>
+                      </div>
+                    ))}
+                    <button onClick={() => imageRef.current?.click()}
+                      className="w-16 h-16 border border-dashed border-white/10 rounded-lg flex items-center justify-center text-white/20 hover:border-violet-500/40 hover:text-violet-400 transition-all text-2xl flex-shrink-0">
+                      +
+                    </button>
+                  </div>
+                ) : (
+                  <button onClick={() => imageRef.current?.click()}
+                    className="w-full border border-dashed border-white/10 rounded-xl p-4 text-center hover:border-violet-500/30 hover:bg-white/[0.02] transition-all cursor-pointer">
+                    <p className="text-white/25 text-xs">Adicione imagens que a IA vai inserir no vídeo</p>
+                    <p className="text-white/15 text-[10px] mt-0.5">JPG, PNG, WEBP · múltiplas imagens</p>
+                  </button>
+                )}
               </div>
 
               {/* Submit */}
